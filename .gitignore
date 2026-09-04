@@ -1,0 +1,25 @@
+# Виртуальное окружение
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# База данных и данные
+*.db
+*.sqlite3
+
+# Сгенерированные графики
+plots/*.png
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Тестовые артефакты
+.coverage
+htmlcov/
+.pytest_cache/
