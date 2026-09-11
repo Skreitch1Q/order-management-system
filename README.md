@@ -21,7 +21,7 @@ seaborn, networkx).
   - Выручка по категориям;
   - Граф связей клиентов (по городу / общим товарам).
 - Обработка ошибок через `try...except`.
-- Unit-тесты для модулей `models.py` и `analysis.py`.
+- Unit-тесты для модулей `models.py`, `analysis.py` и `db.py`.
 
 ## Структура проекта
 
@@ -34,7 +34,8 @@ seaborn, networkx).
 ├── analysis.py      # Анализ и визуализация данных
 ├── tests/           # Unit-тесты
 │   ├── test_models.py
-│   └── test_analysis.py
+│   ├── test_analysis.py
+│   └── test_db.py
 ├── requirements.txt
 └── README.md
 ```
