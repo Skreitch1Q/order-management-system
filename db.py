@@ -1,7 +1,9 @@
-"""Работа с базой данных SQLite.
+"""Работа с базой данных на основе Excel.
 
-Модуль отвечает за сохранение и загрузку данных между запусками
-приложения, а также за импорт и экспорт в форматы CSV и JSON.
+Данные хранятся в книге Excel (файл .xlsx) с отдельными листами:
+products, customers, orders, order_items. Модуль отвечает за сохранение
+и загрузку данных между запусками приложения, а также за импорт и
+экспорт в форматы CSV и JSON.
 """
 
 from __future__ import annotations
@@ -9,75 +11,142 @@ from __future__ import annotations
 import csv
 import json
 import os
-import sqlite3
 from typing import List, Optional
 
-from models import Customer, Order, OrderItem, Product
+from openpyxl import Workbook, load_workbook
+
+from models import Customer, Order, Product
+
+# Заголовки колонок для каждого листа книги Excel.
+_HEADERS: dict = {
+    "products": ["product_id", "name", "price", "category"],
+    "customers": ["customer_id", "name", "email", "phone", "city"],
+    "orders": ["order_id", "customer_id", "order_date", "status"],
+    "order_items": ["item_id", "order_id", "product_id", "quantity"],
+}
+
+# Название колонки-идентификатора для каждого листа.
+_ID_COLUMNS: dict = {
+    "products": "product_id",
+    "customers": "customer_id",
+    "orders": "order_id",
+    "order_items": "item_id",
+}
 
 
 class Database:
-    """Управление базой данных SQLite.
+    """Управление базой данных в файле Excel.
 
     Parameters
     ----------
     db_path : str, optional
-        Путь к файлу базы данных. По умолчанию "shop.db" в текущей директории.
+        Путь к файлу Excel. По умолчанию "shop.xlsx" в текущей директории.
     """
 
-    def __init__(self, db_path: str = "shop.db") -> None:
+    def __init__(self, db_path: str = "shop.xlsx") -> None:
         self._db_path = db_path
-        self._init_schema()
+        self._ensure_workbook()
 
-    def _init_schema(self) -> None:
-        """Создать таблицы базы данных, если они отсутствуют."""
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS products (
-                    product_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    category TEXT NOT NULL
-                );
+    # ------------------------------------------------------------------ низкий уровень
 
-                CREATE TABLE IF NOT EXISTS customers (
-                    customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    email TEXT NOT NULL UNIQUE,
-                    phone TEXT NOT NULL,
-                    city TEXT NOT NULL
-                );
+    def _ensure_workbook(self) -> None:
+        """Открыть или создать книгу Excel со всеми необходимыми листами."""
+        if os.path.exists(self._db_path):
+            self._workbook = load_workbook(self._db_path)
+        else:
+            self._workbook = Workbook()
+            self._workbook.remove(self._workbook.active)
+        for sheet, headers in _HEADERS.items():
+            ws = self._sheet(sheet, create=True)
+            if ws.max_row == 0:
+                ws.append(headers)
+        self._save()
 
-                CREATE TABLE IF NOT EXISTS orders (
-                    order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    customer_id INTEGER NOT NULL,
-                    order_date TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    FOREIGN KEY (customer_id) REFERENCES customers (customer_id)
-                );
+    def _sheet(self, name: str, create: bool = True):
+        """Получить лист книги Excel по имени.
 
-                CREATE TABLE IF NOT EXISTS order_items (
-                    item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    order_id INTEGER NOT NULL,
-                    product_id INTEGER NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    FOREIGN KEY (order_id) REFERENCES orders (order_id),
-                    FOREIGN KEY (product_id) REFERENCES products (product_id)
-                );
-                """
-            )
-
-    def _connect(self) -> sqlite3.Connection:
-        """Установить соединение с базой данных.
+        Parameters
+        ----------
+        name : str
+            Имя листа.
+        create : bool, optional
+            Создать лист, если он отсутствует (по умолчанию True).
 
         Returns
         -------
-        sqlite3.Connection
-            Соединение с включёнными внешними ключами.
+        openpyxl.worksheet.worksheet.Worksheet
+            Лист книги.
         """
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        if name in self._workbook.sheetnames:
+            return self._workbook[name]
+        if create:
+            return self._workbook.create_sheet(name)
+        raise ValueError(f"Лист {name} не найден")
+
+    def _save(self) -> None:
+        """Сохранить книгу Excel на диск."""
+        self._workbook.save(self._db_path)
+
+    def _read_all(self, name: str) -> List[dict]:
+        """Прочитать все строки листа в список словарей.
+
+        Parameters
+        ----------
+        name : str
+            Имя листа.
+
+        Returns
+        -------
+        list[dict]
+            Список строк, каждая строка — словарь "колонка: значение".
+        """
+        ws = self._sheet(name)
+        headers = _HEADERS[name]
+        rows = []
+        for values in ws.iter_rows(min_row=2, values_only=True):
+            if values is None or all(v is None for v in values):
+                continue
+            rows.append(dict(zip(headers, values)))
+        return rows
+
+    def _rewrite(self, name: str, rows: List[dict]) -> None:
+        """Полностью перезаписать лист новыми строками.
+
+        Parameters
+        ----------
+        name : str
+            Имя листа.
+        rows : list[dict]
+            Список строк для записи.
+        """
+        ws = self._sheet(name)
+        ws.delete_rows(1, ws.max_row)
+        headers = _HEADERS[name]
+        ws.append(headers)
+        for row in rows:
+            ws.append([row.get(h) for h in headers])
+        self._save()
+
+    def _next_id(self, name: str) -> int:
+        """Вычислить следующий свободный идентификатор.
+
+        Parameters
+        ----------
+        name : str
+            Имя листа.
+
+        Returns
+        -------
+        int
+            Следующий идентификатор.
+        """
+        id_column = _ID_COLUMNS[name]
+        ids = [
+            int(r[id_column])
+            for r in self._read_all(name)
+            if r.get(id_column) is not None
+        ]
+        return (max(ids) + 1) if ids else 1
 
     # --- Товары ---
 
@@ -94,13 +163,23 @@ class Database:
         int
             Идентификатор добавленного товара.
         """
-        with self._connect() as conn:
-            cur = conn.execute(
-                "INSERT INTO products (name, price, category) VALUES (?, ?, ?)",
-                (product.name, product.price, product.category),
-            )
-            product.product_id = cur.lastrowid
-            return cur.lastrowid
+        rows = self._read_all("products")
+        if product.product_id is None or any(
+            r["product_id"] == product.product_id for r in rows
+        ):
+            product.product_id = self._next_id("products")
+        else:
+            rows = [r for r in rows if r["product_id"] != product.product_id]
+        rows.append(
+            {
+                "product_id": product.product_id,
+                "name": product.name,
+                "price": product.price,
+                "category": product.category,
+            }
+        )
+        self._rewrite("products", rows)
+        return product.product_id
 
     def update_product(self, product: Product) -> None:
         """Обновить данные товара в базе.
@@ -110,11 +189,13 @@ class Database:
         product : Product
             Товар с обновлёнными данными.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE products SET name = ?, price = ?, category = ? WHERE product_id = ?",
-                (product.name, product.price, product.category, product.product_id),
-            )
+        rows = self._read_all("products")
+        for row in rows:
+            if row["product_id"] == product.product_id:
+                row["name"] = product.name
+                row["price"] = product.price
+                row["category"] = product.category
+        self._rewrite("products", rows)
 
     def delete_product(self, product_id: int) -> None:
         """Удалить товар по идентификатору.
@@ -124,8 +205,8 @@ class Database:
         product_id : int
             Идентификатор товара.
         """
-        with self._connect() as conn:
-            conn.execute("DELETE FROM products WHERE product_id = ?", (product_id,))
+        rows = [r for r in self._read_all("products") if r["product_id"] != product_id]
+        self._rewrite("products", rows)
 
     def get_product(self, product_id: int) -> Optional[Product]:
         """Получить товар по идентификатору.
@@ -140,14 +221,15 @@ class Database:
         Product | None
             Товар или None, если товар не найден.
         """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT product_id, name, price, category FROM products WHERE product_id = ?",
-                (product_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return Product(row[1], row[2], row[3], product_id=row[0])
+        for row in self._read_all("products"):
+            if row["product_id"] == product_id:
+                return Product(
+                    row["name"],
+                    row["price"],
+                    row["category"],
+                    product_id=row["product_id"],
+                )
+        return None
 
     def get_all_products(self) -> List[Product]:
         """Получить список всех товаров.
@@ -155,13 +237,15 @@ class Database:
         Returns
         -------
         list[Product]
-            Список товаров.
+            Список товаров, отсортированный по названию.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT product_id, name, price, category FROM products ORDER BY name"
-            ).fetchall()
-        return [Product(r[1], r[2], r[3], product_id=r[0]) for r in rows]
+        rows = sorted(
+            self._read_all("products"), key=lambda r: str(r.get("name", ""))
+        )
+        return [
+            Product(r["name"], r["price"], r["category"], product_id=r["product_id"])
+            for r in rows
+        ]
 
     # --- Клиенты ---
 
@@ -178,13 +262,24 @@ class Database:
         int
             Идентификатор добавленного клиента.
         """
-        with self._connect() as conn:
-            cur = conn.execute(
-                "INSERT INTO customers (name, email, phone, city) VALUES (?, ?, ?, ?)",
-                (customer.name, customer.email, customer.phone, customer.city),
-            )
-            customer.customer_id = cur.lastrowid
-            return cur.lastrowid
+        rows = self._read_all("customers")
+        if customer.customer_id is None or any(
+            r["customer_id"] == customer.customer_id for r in rows
+        ):
+            customer.customer_id = self._next_id("customers")
+        else:
+            rows = [r for r in rows if r["customer_id"] != customer.customer_id]
+        rows.append(
+            {
+                "customer_id": customer.customer_id,
+                "name": customer.name,
+                "email": customer.email,
+                "phone": customer.phone,
+                "city": customer.city,
+            }
+        )
+        self._rewrite("customers", rows)
+        return customer.customer_id
 
     def update_customer(self, customer: Customer) -> None:
         """Обновить данные клиента в базе.
@@ -194,18 +289,14 @@ class Database:
         customer : Customer
             Клиент с обновлёнными данными.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE customers SET name = ?, email = ?, phone = ?, city = ? "
-                "WHERE customer_id = ?",
-                (
-                    customer.name,
-                    customer.email,
-                    customer.phone,
-                    customer.city,
-                    customer.customer_id,
-                ),
-            )
+        rows = self._read_all("customers")
+        for row in rows:
+            if row["customer_id"] == customer.customer_id:
+                row["name"] = customer.name
+                row["email"] = customer.email
+                row["phone"] = customer.phone
+                row["city"] = customer.city
+        self._rewrite("customers", rows)
 
     def delete_customer(self, customer_id: int) -> None:
         """Удалить клиента по идентификатору.
@@ -215,10 +306,10 @@ class Database:
         customer_id : int
             Идентификатор клиента.
         """
-        with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM customers WHERE customer_id = ?", (customer_id,)
-            )
+        rows = [
+            r for r in self._read_all("customers") if r["customer_id"] != customer_id
+        ]
+        self._rewrite("customers", rows)
 
     def get_customer(self, customer_id: int) -> Optional[Customer]:
         """Получить клиента по идентификатору.
@@ -233,15 +324,16 @@ class Database:
         Customer | None
             Клиент или None, если клиент не найден.
         """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT customer_id, name, email, phone, city "
-                "FROM customers WHERE customer_id = ?",
-                (customer_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return Customer(row[1], row[2], row[3], row[4], customer_id=row[0])
+        for row in self._read_all("customers"):
+            if row["customer_id"] == customer_id:
+                return Customer(
+                    row["name"],
+                    row["email"],
+                    row["phone"],
+                    row["city"],
+                    customer_id=row["customer_id"],
+                )
+        return None
 
     def get_all_customers(self) -> List[Customer]:
         """Получить список всех клиентов.
@@ -249,14 +341,21 @@ class Database:
         Returns
         -------
         list[Customer]
-            Список клиентов.
+            Список клиентов, отсортированный по имени.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT customer_id, name, email, phone, city "
-                "FROM customers ORDER BY name"
-            ).fetchall()
-        return [Customer(r[1], r[2], r[3], r[4], customer_id=r[0]) for r in rows]
+        rows = sorted(
+            self._read_all("customers"), key=lambda r: str(r.get("name", ""))
+        )
+        return [
+            Customer(
+                r["name"],
+                r["email"],
+                r["phone"],
+                r["city"],
+                customer_id=r["customer_id"],
+            )
+            for r in rows
+        ]
 
     def search_customers(self, query: str) -> List[Customer]:
         """Поиск клиентов по имени, email, телефону или городу.
@@ -271,15 +370,25 @@ class Database:
         list[Customer]
             Список найденных клиентов.
         """
-        like = f"%{query}%"
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT customer_id, name, email, phone, city FROM customers "
-                "WHERE name LIKE ? OR email LIKE ? OR phone LIKE ? OR city LIKE ? "
-                "ORDER BY name",
-                (like, like, like, like),
-            ).fetchall()
-        return [Customer(r[1], r[2], r[3], r[4], customer_id=r[0]) for r in rows]
+        query_lower = query.strip().lower()
+        if not query_lower:
+            return self.get_all_customers()
+        result = []
+        for row in self._read_all("customers"):
+            searchable = " ".join(
+                str(v) for v in row.values() if v is not None
+            ).lower()
+            if query_lower in searchable:
+                result.append(
+                    Customer(
+                        row["name"],
+                        row["email"],
+                        row["phone"],
+                        row["city"],
+                        customer_id=row["customer_id"],
+                    )
+                )
+        return result
 
     # --- Заказы ---
 
@@ -296,20 +405,37 @@ class Database:
         int
             Идентификатор добавленного заказа.
         """
-        with self._connect() as conn:
-            cur = conn.execute(
-                "INSERT INTO orders (customer_id, order_date, status) VALUES (?, ?, ?)",
-                (order.customer.customer_id, order.order_date, order.status),
+        order_rows = self._read_all("orders")
+        item_rows = self._read_all("order_items")
+        if order.order_id is None or any(
+            r["order_id"] == order.order_id for r in order_rows
+        ):
+            order.order_id = self._next_id("orders")
+        else:
+            order_rows = [r for r in order_rows if r["order_id"] != order.order_id]
+            item_rows = [r for r in item_rows if r["order_id"] != order.order_id]
+        order_rows.append(
+            {
+                "order_id": order.order_id,
+                "customer_id": order.customer.customer_id,
+                "order_date": order.order_date,
+                "status": order.status,
+            }
+        )
+        next_item_id = self._next_id("order_items")
+        for item in order.items:
+            item_rows.append(
+                {
+                    "item_id": next_item_id,
+                    "order_id": order.order_id,
+                    "product_id": item.product.product_id,
+                    "quantity": item.quantity,
+                }
             )
-            order_id = cur.lastrowid
-            for item in order.items:
-                conn.execute(
-                    "INSERT INTO order_items (order_id, product_id, quantity) "
-                    "VALUES (?, ?, ?)",
-                    (order_id, item.product.product_id, item.quantity),
-                )
-            order.order_id = order_id
-            return order_id
+            next_item_id += 1
+        self._rewrite("orders", order_rows)
+        self._rewrite("order_items", item_rows)
+        return order.order_id
 
     def delete_order(self, order_id: int) -> None:
         """Удалить заказ по идентификатору.
@@ -319,9 +445,14 @@ class Database:
         order_id : int
             Идентификатор заказа.
         """
-        with self._connect() as conn:
-            conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
-            conn.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
+        order_rows = [
+            r for r in self._read_all("orders") if r["order_id"] != order_id
+        ]
+        item_rows = [
+            r for r in self._read_all("order_items") if r["order_id"] != order_id
+        ]
+        self._rewrite("orders", order_rows)
+        self._rewrite("order_items", item_rows)
 
     def get_all_orders(self) -> List[Order]:
         """Получить список всех заказов.
@@ -333,30 +464,28 @@ class Database:
         """
         products = {p.product_id: p for p in self.get_all_products()}
         customers = {c.customer_id: c for c in self.get_all_customers()}
-        with self._connect() as conn:
-            order_rows = conn.execute(
-                "SELECT order_id, customer_id, order_date, status FROM orders"
-            ).fetchall()
-            item_rows = conn.execute(
-                "SELECT order_id, product_id, quantity FROM order_items"
-            ).fetchall()
+
+        order_rows = self._read_all("orders")
+        item_rows = self._read_all("order_items")
 
         items_by_order: dict = {}
-        for order_id, product_id, quantity in item_rows:
-            items_by_order.setdefault(order_id, []).append((product_id, quantity))
+        for row in item_rows:
+            items_by_order.setdefault(row["order_id"], []).append(
+                (row["product_id"], row["quantity"])
+            )
 
         orders = []
-        for order_id, customer_id, order_date, status in order_rows:
-            customer = customers.get(customer_id)
+        for row in order_rows:
+            customer = customers.get(row["customer_id"])
             if customer is None:
                 continue
             order = Order(
                 customer=customer,
-                order_date=order_date,
-                status=status,
-                order_id=order_id,
+                order_date=row["order_date"],
+                status=row["status"],
+                order_id=row["order_id"],
             )
-            for product_id, quantity in items_by_order.get(order_id, []):
+            for product_id, quantity in items_by_order.get(row["order_id"], []):
                 product = products.get(product_id)
                 if product is not None:
                     order.add_item(product, quantity)
@@ -397,9 +526,9 @@ class Database:
             self.add_customer(Customer.from_dict(c_data))
         products = self.get_all_products()
         customers = self.get_all_customers()
-        customer_map = {c.name: c for c in customers}
+        customer_map = {c.customer_id: c for c in customers}
         for o_data in data.get("orders", []):
-            customer = customer_map.get(o_data.get("customer_name"))
+            customer = customer_map.get(o_data.get("customer_id"))
             if customer is None:
                 continue
             order = Order.from_dict(o_data, customer, products)
@@ -488,8 +617,7 @@ class Database:
             rows = list(reader)
         if not rows:
             return "Файл CSV пуст"
-        first = rows[0]
-        headers = set(first.keys())
+        headers = set(rows[0].keys())
         count = 0
         if "product_id" in headers and "category" in headers:
             for row in rows:

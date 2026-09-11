@@ -28,7 +28,7 @@ def seed_demo_data() -> None:
     from db import Database
     from models import Customer, Order, Product
 
-    db = Database("shop.db")
+    db = Database("shop.xlsx")
 
     if db.get_all_products():
         print("База данных уже содержит данные. Пропускаем заполнение.")

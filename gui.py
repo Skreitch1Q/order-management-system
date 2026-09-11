@@ -29,7 +29,7 @@ class ShopApp:
         self.root = root
         self.root.title("Система учёта заказов")
         self.root.geometry("1100x700")
-        self.db = Database("shop.db")
+        self.db = Database("shop.xlsx")
         self._output_dir = "plots"
         os.makedirs(self._output_dir, exist_ok=True)
 

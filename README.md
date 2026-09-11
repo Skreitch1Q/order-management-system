@@ -1,8 +1,9 @@
 # Система учёта заказов интернет-магазина
 
 Прототип промышленной системы учёта заказов, клиентов и товаров с графическим
-интерфейсом (tkinter), базой данных (SQLite) и средствами анализа и визуализации
-данных (pandas, matplotlib, seaborn, networkx).
+интерфейсом (tkinter), базой данных на основе Excel (файл `shop.xlsx`, библиотека
+openpyxl) и средствами анализа и визуализации данных (pandas, matplotlib,
+seaborn, networkx).
 
 Проект выполнен в рамках итоговой аттестации по Python.
 
@@ -28,7 +29,7 @@
 .
 ├── main.py          # Точка входа, аргументы командной строки
 ├── models.py        # Классы данных: Product, Customer, Order (+ валидация)
-├── db.py            # Работа с базой данных SQLite, импорт/экспорт
+├── db.py            # База данных в Excel (openpyxl), импорт/экспорт
 ├── gui.py           # Графический интерфейс на tkinter
 ├── analysis.py      # Анализ и визуализация данных
 ├── tests/           # Unit-тесты
@@ -76,6 +77,23 @@ python -m unittest discover tests
 - `seaborn`
 - `networkx`
 - `Pillow`
+- `openpyxl`
+
+## Хранение данных в Excel
+
+База данных — файл `shop.xlsx` (создаётся автоматически при первом запуске).
+Данные распределены по листам книги Excel:
+
+| Лист          | Колонки                                      |
+|---------------|----------------------------------------------|
+| `products`    | product_id, name, price, category            |
+| `customers`   | customer_id, name, email, phone, city        |
+| `orders`      | order_id, customer_id, order_date, status    |
+| `order_items` | item_id, order_id, product_id, quantity      |
+
+Идентификаторы генерируются автоматически (`_next_id`). Для работы с файлом
+используется библиотека `openpyxl`. Данные можно открыть и отредактировать
+вручную в любом редакторе таблиц (Excel, LibreOffice, Google Таблицы).
 
 ## ООП в проекте
 
