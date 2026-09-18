@@ -15,16 +15,6 @@ import sys
 
 
 def seed_demo_data() -> None:
-    """Заполнить базу данных демонстрационными данными.
-
-    Creates
-    -------
-    Создаёт примеры товаров, клиентов и заказов в базе данных.
-
-    Returns
-    -------
-    None
-    """
     from db import Database
     from models import Customer, Order, Product
 
@@ -92,12 +82,6 @@ def seed_demo_data() -> None:
 
 
 def main() -> None:
-    """Основная функция запуска приложения.
-
-    Returns
-    -------
-    None
-    """
     parser = argparse.ArgumentParser(description="Система учёта заказов интернет-магазина")
     parser.add_argument(
         "--seed",

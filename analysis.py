@@ -1,30 +1,13 @@
-"""Анализ и визуализация данных.
-
-Модуль содержит функции для анализа заказов и клиентов,
-а также функции построения графиков с использованием
-pandas, matplotlib, seaborn и networkx.
-"""
-
 from __future__ import annotations
 
-import os
 from collections import Counter, defaultdict
-from typing import List, Tuple
-
-import matplotlib
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
-import networkx as nx
-import numpy as np
-import pandas as pd
-import seaborn as sns
+from typing import Dict, List, Optional, Tuple
 
 from models import Customer, Order
 
 
-def orders_dataframe(orders: List[Order]) -> pd.DataFrame:
-    """Преобразовать список заказов в DataFrame pandas.
+def orders_rows(orders: List[Order]) -> List[dict]:
+    """Преобразовать список заказов в список словарей.
 
     Parameters
     ----------
@@ -33,22 +16,68 @@ def orders_dataframe(orders: List[Order]) -> pd.DataFrame:
 
     Returns
     -------
-    pandas.DataFrame
-        Таблица с полями order_id, date, customer, city, status, total.
+    list[dict]
+        Строки с полями order_id, date, customer, city, status, total.
     """
     rows = []
     for order in orders:
         rows.append(
             {
                 "order_id": order.order_id,
-                "date": pd.to_datetime(order.order_date),
+                "date": order.order_date,
                 "customer": order.customer.name,
                 "city": order.customer.city,
                 "status": order.status,
                 "total": order.total(),
             }
         )
-    return pd.DataFrame(rows)
+    return rows
+
+
+def total_revenue(orders: List[Order]) -> float:
+    """Вычислить суммарную выручку всех заказов.
+
+    Parameters
+    ----------
+    orders : list[Order]
+        Список заказов.
+
+    Returns
+    -------
+    float
+        Сумма стоимостей всех заказов.
+    """
+    return sum(order.total() for order in orders)
+
+
+def recursive_total(orders: List[Order], start: int = 0, end: Optional[int] = None) -> float:
+    """Рекурсивно вычислить суммарную выручку заказов.
+
+    Задача разбивается на две половины, каждая из которых
+    вычисляется рекурсивно (метод «разделяй и властвуй»).
+
+    Parameters
+    ----------
+    orders : list[Order]
+        Список заказов.
+    start : int, optional
+        Индекс начала диапазона (по умолчанию 0).
+    end : int, optional
+        Индекс конца диапазона (по умолчанию len(orders)).
+
+    Returns
+    -------
+    float
+        Сумма стоимостей заказов в диапазоне [start, end).
+    """
+    if end is None:
+        end = len(orders)
+    if start >= end:
+        return 0.0
+    if end - start == 1:
+        return orders[start].total()
+    middle = (start + end) // 2
+    return recursive_total(orders, start, middle) + recursive_total(orders, middle, end)
 
 
 def top_customers(orders: List[Order], top_n: int = 5) -> List[Tuple[Customer, int]]:
@@ -91,7 +120,7 @@ def top_customers_by_total(orders: List[Order], top_n: int = 5) -> List[Tuple[Cu
     return sorted(totals.items(), key=lambda item: item[1], reverse=True)[:top_n]
 
 
-def orders_by_date(orders: List[Order]) -> pd.DataFrame:
+def orders_by_date(orders: List[Order]) -> List[dict]:
     """Получить динамику числа заказов по датам.
 
     Parameters
@@ -101,18 +130,22 @@ def orders_by_date(orders: List[Order]) -> pd.DataFrame:
 
     Returns
     -------
-    pandas.DataFrame
-        Таблица с количеством заказов и суммой по датам.
+    list[dict]
+        Строки с полями date, count, sum, отсортированные по дате.
     """
-    df = orders_dataframe(orders)
-    if df.empty:
-        return pd.DataFrame(columns=["date", "count", "sum"])
-    grouped = (
-        df.groupby(df["date"].dt.date)
-        .agg(count=("total", "size"), sum=("total", "sum"))
-        .reset_index()
-    )
-    return grouped.sort_values("date")
+    grouped: Dict[str, List[float]] = defaultdict(list)
+    for order in orders:
+        grouped[order.order_date].append(order.total())
+    rows = []
+    for order_date, totals in grouped.items():
+        rows.append(
+            {
+                "date": order_date,
+                "count": len(totals),
+                "sum": sum(totals),
+            }
+        )
+    return sorted(rows, key=lambda row: row["date"])
 
 
 def top_products(orders: List[Order], top_n: int = 5) -> List[Tuple[str, int]]:
@@ -137,8 +170,8 @@ def top_products(orders: List[Order], top_n: int = 5) -> List[Tuple[str, int]]:
     return counts.most_common(top_n)
 
 
-def sales_by_category(orders: List[Order]) -> pd.Series:
-    """Продажи по категориям товаров.
+def sales_by_category(orders: List[Order]) -> List[Tuple[str, float]]:
+    """Выручка по категориям товаров.
 
     Parameters
     ----------
@@ -147,21 +180,124 @@ def sales_by_category(orders: List[Order]) -> pd.Series:
 
     Returns
     -------
-    pandas.Series
-        Сумма выручки по категориям.
+    list[tuple[str, float]]
+        Список пар (категория, выручка), отсортированный по убыванию.
     """
     category_revenue = defaultdict(float)
     for order in orders:
         for item in order.items:
             category_revenue[item.product.category] += item.subtotal()
-    return pd.Series(category_revenue).sort_values(ascending=False)
+    return sorted(category_revenue.items(), key=lambda item: item[1], reverse=True)
 
 
-def build_social_graph(orders: List[Order]) -> nx.Graph:
+class Graph:
+    """Простой неориентированный взвешенный граф.
+
+    Реализован на чистом Python, используется для построения
+    графа связей клиентов и его отрисовки на холсте tkinter.
+    """
+
+    def __init__(self) -> None:
+        """"""
+        self._nodes: set = set()
+        self._edges: Dict[Tuple[str, str], float] = {}
+        self._attributes: Dict[str, dict] = {}
+
+    def add_node(self, node: str, **attributes) -> None:
+        """Добавить вершину в граф.
+
+        Parameters
+        ----------
+        node : str
+            Имя вершины.
+        **attributes
+            Произвольные атрибуты вершины.
+        """
+        self._nodes.add(node)
+        self._attributes.setdefault(node, {})
+        self._attributes[node].update(attributes)
+
+    def add_edge(self, source: str, target: str, weight: float = 1.0) -> None:
+        """Добавить ребро между вершинами.
+
+        Parameters
+        ----------
+        source : str
+            Первая вершина ребра.
+        target : str
+            Вторая вершина ребра.
+        weight : float, optional
+            Вес ребра (по умолчанию 1.0).
+        """
+        self.add_node(source)
+        self.add_node(target)
+        key = (source, target) if source < target else (target, source)
+        if key in self._edges:
+            self._edges[key] += weight
+        else:
+            self._edges[key] = weight
+
+    def nodes(self) -> List[str]:
+        """Список вершин графа.
+
+        Returns
+        -------
+        list[str]
+            Имена вершин.
+        """
+        return list(self._nodes)
+
+    def edges(self) -> List[Tuple[str, str, float]]:
+        """Список рёбер графа.
+
+        Returns
+        -------
+        list[tuple[str, str, float]]
+            Тройки (вершина, вершина, вес).
+        """
+        return [(u, v, w) for (u, v), w in self._edges.items()]
+
+    def node_count(self) -> int:
+        """Количество вершин графа.
+
+        Returns
+        -------
+        int
+            Число вершин.
+        """
+        return len(self._nodes)
+
+    def edge_count(self) -> int:
+        """Количество рёбер графа.
+
+        Returns
+        -------
+        int
+            Число рёбер.
+        """
+        return len(self._edges)
+
+    def attributes_of(self, node: str) -> dict:
+        """Атрибуты вершины.
+
+        Parameters
+        ----------
+        node : str
+            Имя вершины.
+
+        Returns
+        -------
+        dict
+            Словарь атрибутов вершины.
+        """
+        return self._attributes.get(node, {})
+
+
+def build_customer_graph(orders: List[Order]) -> Graph:
     """Построить граф связей клиентов.
 
     Клиенты соединяются ребром, если у них общий город
-    или они покупали общие товары.
+    или они покупали общие товары. Вес ребра равен числу общих связей.
 
     Parameters
     ----------
@@ -170,26 +306,23 @@ def build_social_graph(orders: List[Order]) -> nx.Graph:
 
     Returns
     -------
-    networkx.Graph
-        Граф, вершины — клиенты, рёбра — общие связи.
+    Graph
+        Граф: вершины — клиенты, рёбра — общие связи.
     """
-    graph = nx.Graph()
+    graph = Graph()
     customers = {order.customer for order in orders}
     for customer in customers:
         graph.add_node(customer.name, city=customer.city)
 
-    city_groups: dict = defaultdict(list)
+    city_groups: Dict[str, List[str]] = defaultdict(list)
     for customer in customers:
         city_groups[customer.city].append(customer.name)
     for members in city_groups.values():
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
-                if graph.has_edge(members[i], members[j]):
-                    graph[members[i]][members[j]]["weight"] += 1
-                else:
-                    graph.add_edge(members[i], members[j], weight=1)
+                graph.add_edge(members[i], members[j], weight=1)
 
-    product_buyers: dict = defaultdict(list)
+    product_buyers: Dict[str, List[str]] = defaultdict(list)
     for order in orders:
         for item in order.items:
             product_buyers[item.product.name].append(order.customer.name)
@@ -197,169 +330,6 @@ def build_social_graph(orders: List[Order]) -> nx.Graph:
         unique_buyers = list(dict.fromkeys(buyers))
         for i in range(len(unique_buyers)):
             for j in range(i + 1, len(unique_buyers)):
-                if graph.has_edge(unique_buyers[i], unique_buyers[j]):
-                    graph[unique_buyers[i]][unique_buyers[j]]["weight"] += 1
-                else:
-                    graph.add_edge(unique_buyers[i], unique_buyers[j], weight=0.5)
+                graph.add_edge(unique_buyers[i], unique_buyers[j], weight=0.5)
 
     return graph
-
-
-def save_plot_top_customers(orders: List[Order], path: str) -> str:
-    """Сохранить график топ клиентов по числу заказов.
-
-    Parameters
-    ----------
-    orders : list[Order]
-        Список заказов.
-    path : str
-        Путь к сохраняемому изображению.
-
-    Returns
-    -------
-    str
-        Путь к сохранённому изображению.
-    """
-    data = top_customers(orders, top_n=5)
-    if not data:
-        raise ValueError("Нет данных для построения графика")
-    plt.figure(figsize=(8, 5))
-    names = [c.name for c, _ in data]
-    counts = [cnt for _, cnt in data]
-    sns.barplot(x=names, y=counts, hue=names, palette="viridis", legend=False)
-    plt.title("Топ 5 клиентов по числу заказов")
-    plt.xlabel("Клиент")
-    plt.ylabel("Число заказов")
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close()
-    return path
-
-
-def save_plot_orders_dynamics(orders: List[Order], path: str) -> str:
-    """Сохранить график динамики числа заказов по датам.
-
-    Parameters
-    ----------
-    orders : list[Order]
-        Список заказов.
-    path : str
-        Путь к сохраняемому изображению.
-
-    Returns
-    -------
-    str
-        Путь к сохранённому изображению.
-    """
-    df = orders_by_date(orders)
-    if df.empty:
-        raise ValueError("Нет данных для построения графика")
-    plt.figure(figsize=(10, 5))
-    sns.lineplot(data=df, x="date", y="count", marker="o")
-    plt.title("Динамика количества заказов по датам")
-    plt.xlabel("Дата")
-    plt.ylabel("Число заказов")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close()
-    return path
-
-
-def save_plot_top_products(orders: List[Order], path: str) -> str:
-    """Сохранить график топ товаров по количеству проданных штук.
-
-    Parameters
-    ----------
-    orders : list[Order]
-        Список заказов.
-    path : str
-        Путь к сохраняемому изображению.
-
-    Returns
-    -------
-    str
-        Путь к сохранённому изображению.
-    """
-    data = top_products(orders, top_n=5)
-    if not data:
-        raise ValueError("Нет данных для построения графика")
-    plt.figure(figsize=(8, 5))
-    names = [name for name, _ in data]
-    qty = [q for _, q in data]
-    sns.barplot(x=qty, y=names, hue=names, palette="magma", legend=False, orient="h")
-    plt.title("Топ 5 товаров по количеству продаж")
-    plt.xlabel("Количество штук")
-    plt.ylabel("Товар")
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close()
-    return path
-
-
-def save_plot_sales_by_category(orders: List[Order], path: str) -> str:
-    """Сохранить график выручки по категориям.
-
-    Parameters
-    ----------
-    orders : list[Order]
-        Список заказов.
-    path : str
-        Путь к сохраняемому изображению.
-
-    Returns
-    -------
-    str
-        Путь к сохранённому изображению.
-    """
-    categories = sales_by_category(orders)
-    if categories.empty:
-        raise ValueError("Нет данных для построения графика")
-    plt.figure(figsize=(8, 5))
-    plt.pie(
-        categories.values,
-        labels=categories.index,
-        autopct="%1.1f%%",
-        startangle=90,
-        colors=sns.color_palette("Set2"),
-    )
-    plt.title("Выручка по категориям товаров")
-    plt.axis("equal")
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close()
-    return path
-
-
-def save_plot_customer_graph(orders: List[Order], path: str) -> str:
-    """Сохранить граф связей клиентов.
-
-    Parameters
-    ----------
-    orders : list[Order]
-        Список заказов.
-    path : str
-        Путь к сохраняемому изображению.
-
-    Returns
-    -------
-    str
-        Путь к сохранённому изображению.
-    """
-    graph = build_social_graph(orders)
-    if graph.number_of_nodes() == 0:
-        raise ValueError("Нет данных для построения графа")
-    plt.figure(figsize=(10, 7))
-    pos = nx.spring_layout(graph, seed=42)
-    weights = [graph[u][v].get("weight", 1) for u, v in graph.edges()]
-    nx.draw_networkx_nodes(
-        graph, pos, node_size=600, node_color="lightblue", edgecolors="black"
-    )
-    nx.draw_networkx_edges(graph, pos, width=[w * 1.5 for w in weights], alpha=0.6)
-    nx.draw_networkx_labels(graph, pos, font_size=9)
-    plt.title("Граф связей клиентов (город / общие товары)")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close()
-    return path

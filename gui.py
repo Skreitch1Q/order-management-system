@@ -1,17 +1,16 @@
 """Графический интерфейс приложения на основе tkinter.
 
 Обеспечивает регистрацию клиентов, добавление заказов, товаров,
-поиск, фильтрацию, сортировку, анализ данных, импорт и экспорт.
+поиск, фильтрацию, сортировку, анализ данных и экспорт в CSV.
 """
 
 from __future__ import annotations
 
-import os
-import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import analysis
+import charts
 from db import Database
 from models import Customer, Order, Product
 
@@ -30,8 +29,6 @@ class ShopApp:
         self.root.title("Система учёта заказов")
         self.root.geometry("1100x700")
         self.db = Database("shop.xlsx")
-        self._output_dir = "plots"
-        os.makedirs(self._output_dir, exist_ok=True)
 
         self._build_menu()
         self._build_tabs()
@@ -44,9 +41,6 @@ class ShopApp:
         menubar = tk.Menu(self.root)
 
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Экспорт данных в JSON", command=self.export_json)
-        file_menu.add_command(label="Импорт данных из JSON", command=self.import_json)
-        file_menu.add_separator()
         file_menu.add_command(label="Экспорт заказов в CSV", command=self.export_orders_csv)
         file_menu.add_command(label="Экспорт клиентов в CSV", command=self.export_customers_csv)
         file_menu.add_command(label="Экспорт товаров в CSV", command=self.export_products_csv)
@@ -346,6 +340,19 @@ class ShopApp:
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Ошибка", f"Непредвиденная ошибка: {exc}")
 
+    def _set_analysis_text(self, lines: list) -> None:
+        """Записать текстовый результат анализа в виджет.
+
+        Parameters
+        ----------
+        lines : list
+            Строки результата анализа.
+        """
+        self.analysis_text.config(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert("1.0", "\n".join(lines))
+        self.analysis_text.config(state="disabled")
+
     # ------------------------------------------------------------------ данные
 
     def refresh_all(self) -> None:
@@ -581,11 +588,15 @@ class ShopApp:
         def do():
             orders = self.db.get_all_orders()
             data = analysis.top_customers(orders)
-            path = analysis.save_plot_top_customers(orders, "plots/top_customers.png")
             lines = ["Топ клиентов по числу заказов:"]
             for i, (c, cnt) in enumerate(data, 1):
-                lines.append(f"{i}. {c.name} — {cnt}")
-            self._show_plot(path, lines, "Топ клиентов по числу заказов")
+                lines.append(f"{i}. {c.name} — {cnt} заказов")
+            self._set_analysis_text(lines)
+            title = "Топ 5 клиентов по числу заказов"
+            window, canvas = charts.create_chart_window(self.root, title)
+            labels = [c.name for c, _ in data] or ["—"]
+            values = [float(cnt) for _, cnt in data] or [0]
+            charts.draw_bar_chart(canvas, labels, values, title)
 
         self._safe(do)
 
@@ -593,16 +604,20 @@ class ShopApp:
         """Показать динамику количества заказов."""
         def do():
             orders = self.db.get_all_orders()
-            df = analysis.orders_by_date(orders)
-            if df.empty:
+            data = analysis.orders_by_date(orders)
+            if not data:
                 raise ValueError("Нет данных для анализа")
-            path = analysis.save_plot_orders_dynamics(orders, "plots/orders_dynamics.png")
             lines = ["Динамика заказов по датам:"]
-            for _, row in df.iterrows():
+            for row in data:
                 lines.append(
                     f"{row['date']}: {row['count']} заказов, {row['sum']:.2f} руб."
                 )
-            self._show_plot(path, lines, "Динамика количества заказов")
+            self._set_analysis_text(lines)
+            title = "Динамика количества заказов по датам"
+            window, canvas = charts.create_chart_window(self.root, title)
+            labels = [row["date"] for row in data]
+            values = [float(row["count"]) for row in data]
+            charts.draw_line_chart(canvas, labels, values, title)
 
         self._safe(do)
 
@@ -611,11 +626,15 @@ class ShopApp:
         def do():
             orders = self.db.get_all_orders()
             data = analysis.top_products(orders)
-            path = analysis.save_plot_top_products(orders, "plots/top_products.png")
             lines = ["Топ товаров по количеству продаж:"]
             for i, (name, qty) in enumerate(data, 1):
                 lines.append(f"{i}. {name} — {qty} шт.")
-            self._show_plot(path, lines, "Топ товаров")
+            self._set_analysis_text(lines)
+            title = "Топ 5 товаров по количеству продаж"
+            window, canvas = charts.create_chart_window(self.root, title)
+            labels = [name for name, _ in data] or ["—"]
+            values = [float(q) for _, q in data] or [0]
+            charts.draw_bar_chart(canvas, labels, values, title)
 
         self._safe(do)
 
@@ -623,12 +642,18 @@ class ShopApp:
         """Показать выручку по категориям."""
         def do():
             orders = self.db.get_all_orders()
-            path = analysis.save_plot_sales_by_category(orders, "plots/sales_by_category.png")
-            categories = analysis.sales_by_category(orders)
+            data = analysis.sales_by_category(orders)
+            if not data:
+                raise ValueError("Нет данных для анализа")
             lines = ["Выручка по категориям:"]
-            for category, revenue in categories.items():
+            for category, revenue in data:
                 lines.append(f"{category}: {revenue:.2f} руб.")
-            self._show_plot(path, lines, "Выручка по категориям")
+            self._set_analysis_text(lines)
+            title = "Выручка по категориям товаров"
+            window, canvas = charts.create_chart_window(self.root, title)
+            labels = [category for category, _ in data]
+            values = [float(revenue) for _, revenue in data]
+            charts.draw_pie_chart(canvas, labels, values, title)
 
         self._safe(do)
 
@@ -636,76 +661,19 @@ class ShopApp:
         """Показать граф связей клиентов."""
         def do():
             orders = self.db.get_all_orders()
-            graph = analysis.build_social_graph(orders)
-            path = analysis.save_plot_customer_graph(orders, "plots/customer_graph.png")
+            graph = analysis.build_customer_graph(orders)
             lines = [
-                f"Граф связей построен: {graph.number_of_nodes()} клиентов, "
-                f"{graph.number_of_edges()} связей."
+                f"Граф связей построен: {graph.node_count()} клиентов, "
+                f"{graph.edge_count()} связей."
             ]
-            self._show_plot(path, lines, "Граф связей клиентов")
+            self._set_analysis_text(lines)
+            title = "Граф связей клиентов (город / общие товары)"
+            window, canvas = charts.create_chart_window(self.root, title)
+            charts.draw_customer_graph(canvas, graph, title)
 
         self._safe(do)
 
-    def _show_plot(self, path: str, text_lines: list, title: str) -> None:
-        """Вывести результат анализа: текст и картинку в отдельном окне.
-
-        Parameters
-        ----------
-        path : str
-            Путь к изображению.
-        text_lines : list
-            Строки текстового анализа.
-        title : str
-            Заголовок окна.
-        """
-        self.analysis_text.config(state="normal")
-        self.analysis_text.delete("1.0", "end")
-        self.analysis_text.insert("1.0", "\n".join(text_lines))
-        self.analysis_text.config(state="disabled")
-
-        view = tk.Toplevel(self.root)
-        view.title(title)
-        view.geometry("800x600")
-        try:
-            from PIL import Image, ImageTk
-
-            image = Image.open(path)
-            image.thumbnail((780, 560))
-            photo = ImageTk.PhotoImage(image)
-            label = ttk.Label(view, image=photo)
-            label.image = photo
-            label.pack(fill="both", expand=True)
-        except Exception as exc:  # noqa: BLE001
-            ttk.Label(view, text=f"Не удалось открыть изображение: {exc}").pack(padx=20, pady=10)
-
-    # --- Импорт / экспорт ---
-
-    def export_json(self) -> None:
-        """Экспортировать данные в JSON-файл."""
-        path = filedialog.asksaveasfilename(
-            defaultextension=".json", filetypes=[("JSON files", "*.json")]
-        )
-        if not path:
-            return
-
-        def do():
-            self.db.export_json(path)
-            messagebox.showinfo("Успех", f"Данные экспортированы в {path}")
-
-        self._safe(do)
-
-    def import_json(self) -> None:
-        """Импортировать данные из JSON-файла."""
-        path = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
-        if not path:
-            return
-
-        def do():
-            self.db.import_json(path)
-            self.refresh_all()
-            messagebox.showinfo("Успех", "Данные импортированы из JSON")
-
-        self._safe(do)
+    # --- Экспорт / импорт CSV ---
 
     def export_orders_csv(self) -> None:
         """Экспортировать заказы в CSV-файл."""

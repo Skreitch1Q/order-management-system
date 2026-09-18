@@ -3,13 +3,12 @@
 Данные хранятся в книге Excel (файл .xlsx) с отдельными листами:
 products, customers, orders, order_items. Модуль отвечает за сохранение
 и загрузку данных между запусками приложения, а также за импорт и
-экспорт в форматы CSV и JSON.
+экспорт в формате CSV.
 """
 
 from __future__ import annotations
 
 import csv
-import json
 import os
 from typing import List, Optional
 
@@ -492,56 +491,9 @@ class Database:
             orders.append(order)
         return orders
 
-    # --- Импорт / экспорт ---
-
-    def export_json(self, path: str) -> None:
-        """Экспортировать все данные в файл JSON.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу JSON.
-        """
-        data = {
-            "products": [p.to_dict() for p in self.get_all_products()],
-            "customers": [c.to_dict() for c in self.get_all_customers()],
-            "orders": [o.to_dict() for o in self.get_all_orders()],
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    def import_json(self, path: str) -> None:
-        """Импортировать данные из файла JSON.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу JSON.
-        """
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for p_data in data.get("products", []):
-            self.add_product(Product.from_dict(p_data))
-        for c_data in data.get("customers", []):
-            self.add_customer(Customer.from_dict(c_data))
-        products = self.get_all_products()
-        customers = self.get_all_customers()
-        customer_map = {c.customer_id: c for c in customers}
-        for o_data in data.get("orders", []):
-            customer = customer_map.get(o_data.get("customer_id"))
-            if customer is None:
-                continue
-            order = Order.from_dict(o_data, customer, products)
-            self.add_order(order)
+    # --- Импорт / экспорт CSV ---
 
     def export_orders_csv(self, path: str) -> None:
-        """Экспортировать заказы в файл CSV.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу CSV.
-        """
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow(
@@ -560,13 +512,6 @@ class Database:
                 )
 
     def export_customers_csv(self, path: str) -> None:
-        """Экспортировать клиентов в файл CSV.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу CSV.
-        """
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow(["customer_id", "name", "email", "phone", "city"])
@@ -582,13 +527,6 @@ class Database:
                 )
 
     def export_products_csv(self, path: str) -> None:
-        """Экспортировать товары в файл CSV.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу CSV.
-        """
         with open(path, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, delimiter=";")
             writer.writerow(["product_id", "name", "price", "category"])
@@ -598,20 +536,6 @@ class Database:
                 )
 
     def import_csv(self, path: str) -> str:
-        """Импортировать данные из CSV-файла.
-
-        Формат определяется по заголовку первой строки.
-
-        Parameters
-        ----------
-        path : str
-            Путь к файлу CSV.
-
-        Returns
-        -------
-        str
-            Сообщение о результате импорта.
-        """
         with open(path, "r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f, delimiter=";")
             rows = list(reader)
